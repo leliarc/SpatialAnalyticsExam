@@ -1,1 +1,1 @@
-# SpatialAnalyticsExam
+# Spatial Analytics Exam
