@@ -1,0 +1,184 @@
+---
+title: "Modeling the Original Marathon"
+author: "Lelia Rønnow Corfitsen"
+date: "2025-05-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# load libraries
+```{r}
+library(gdistance)
+library(raster)
+library(sp)
+library(geosphere)
+```
+
+# load and merge DEM data
+```{r}
+# make a compined dem of 5 tifs
+# load the 5 DEMs
+dem1 <- raster("realattica1.tif")
+dem2 <- raster("realattica2.tif")
+dem3 <- raster("realattica3.tif")
+dem4 <- raster("realattica4.tif")
+dem5 <- raster("realattica5.tif")
+
+# merge them
+dem <- merge(dem1, dem2, dem3, dem4, dem5)
+
+# save merged dem
+writeRaster(dem, "merged_dem.tif", format = "GTiff", overwrite = TRUE)
+```
+
+# Load DEM and prepare coordinates
+```{r}
+# load DEM
+dem <- raster("merged_dem.tif")
+```
+
+```{r}
+# Define coordinates for Marathon, Athens, and Sparta (lon, lat)
+marathon <- c(24.0176, 38.1530)
+athens <- c(23.7275, 37.9838)
+sparta <- c(22.4297, 37.0738)
+```
+
+```{r}
+# convert to SpatialPoints
+coords <- SpatialPoints(rbind(marathon, athens, sparta), proj4string = CRS("+proj=longlat +datum=WGS84"))
+```
+
+```{r}
+# match CRS for DEM and coordinates
+if (!compareCRS(dem, coords)) {
+  coords <- spTransform(coords, crs(dem))
+}
+```
+
+# preprocess DEM
+```{r}
+# Reduce DEM resolution
+dem_lowres <- aggregate(dem, fact = 5)
+
+# Compute slope (in radians)
+slope <- terrain(dem_lowres, opt = "slope", unit = "radians")
+```
+
+# define Tobler's Hiking function
+```{r}
+# Tobler's Hiking Function in km/h
+tobler_hiking_speed <- function(s) {
+  6 * exp(-3.5 * abs(s + 0.05))
+}
+```
+
+```{r}
+# Apply Tobler's function
+speed_kmh <- calc(slope, fun = tobler_hiking_speed)
+
+# Convert to m/s
+speed_ms <- speed_kmh * (1000 / 3600) 
+
+```
+
+```{r}
+# Build transition matrix: cost = time in seconds per meter (s/m)
+tr <- transition(speed_ms, function(x) 1 / mean(x), directions = 8)
+
+# Geographic correction
+tr_corrected <- geoCorrection(tr, type = "c", scl = FALSE)
+
+```
+
+# create function to estimate stats for the runs
+```{r}
+estimate_path_stats <- function(from, to, tr_layer, weight_kg = 60, MET = 12.3) {
+  time_sec <- costDistance(tr_layer, from, to)
+  time_hours <- as.numeric(time_sec) / 3600
+  calories_burned <- MET * weight_kg * time_hours
+  
+  list(
+    time_sec = time_sec,
+    time_hours = time_hours,
+    calories_burned = calories_burned, 
+    path = shortestPath(tr_layer, from, to, output = "SpatialLines")
+  )
+}
+```
+
+# Analysis for the two paths
+```{r}
+# Marathon -> Athens
+ma_stats <- estimate_path_stats(coords[1], coords[2], tr_corrected)
+
+print(paste("Marathon -> Athens - Time (hr):", round(ma_stats$time_hours, 2)))
+print(paste("Marathon -> Athens - Calories burned:", round(ma_stats$calories_burned)))
+
+```
+
+```{r}
+# Athens -> Sparta
+as_stats <- estimate_path_stats(coords[2], coords[3], tr_corrected)
+
+print(paste("Athens -> Sparta - Time (hr):", round(as_stats$time_hours, 2)))
+print(paste("Athens -> Sparta - Calories burned:", round(as_stats$calories_burned)))
+```
+
+# calculating distance
+```{r}
+# Compute the least-cost path from Marathon to Athens
+ma_path <- shortestPath(tr_corrected, coords[1], coords[2], output = "SpatialLines")
+
+ma_least_cost <- geosphere::lengthLine(ma_path)/1000
+
+print(paste("Least-cost path distance from Marathon to Athens (km):", round(ma_least_cost, 4)))
+
+```
+
+```{r}
+# compute the least-cost path from Athens to Sparta
+as_path <- shortestPath(tr_corrected, coords[2], coords[3], output = "SpatialLines")
+
+as_least_cost <- geosphere::lengthLine(as_path)/1000
+print(paste("Least-cost path distance from Athens to Sparta (km):", round(as_least_cost, 4)))
+
+```
+
+# Plot the paths 
+```{r}
+# Plot the path
+plot(dem_lowres, main = "Digital Elevation Map of Greece with Key Locations", xlim = c(22, 25), ylim = c(36.5, 38.5), axes = TRUE, box = FALSE)
+lines(ma_path, col = "forestgreen", lwd = 2)
+lines(as_path, col = "darkorchid", lwd = 2)
+points(coords, pch = 19, col = c("black", "black"))
+
+text(marathon[1], marathon[2], labels = "Marathon", pos = 3, col = "black", cex = 0.8)
+text(athens[1], athens[2], labels = "Athens", pos = 3, col = "black", cex = 0.8)
+text(sparta[1], sparta[2], labels = "Sparta", pos = 3, col = "black", cex = 0.8)
+```
+
+```{r}
+plot(dem_lowres, main = "Least-Cost Path from Marathon to Athens", xlim = c(23, 25), ylim = c(37.8, 38.3), axes = TRUE, box = FALSE)
+lines(ma_path, col = "forestgreen", lwd = 2)
+points(coords, pch = 19, col = c("black", "black"))
+
+text(marathon[1], marathon[2], labels = "Marathon", pos = 3, col = "black", cex = 0.8)
+text(athens[1], athens[2], labels = "Athens", pos = 3, col = "black", cex = 0.8)
+
+```
+
+```{r}
+plot(dem_lowres, main = "Least-Cost Path from Athens to Sparta", xlim = c(22, 24), ylim = c(37, 38.1), axes = TRUE, box = FALSE)
+
+lines(as_path, col = "darkorchid", lwd = 2)
+points(coords, pch = 19, col = c("black", "black"))
+
+text(athens[1], athens[2], labels = "Athens", pos = 3, col = "black", cex = 0.8)
+text(sparta[1], sparta[2], labels = "Sparta", pos = 3, col = "black", cex = 0.8)
+
+```
+
